@@ -1,0 +1,96 @@
+--- fel-spiflash.c	2018-04-13 17:21:15.659103001 -0300
++++ /home/osboxes/nanoPi/sunxi-tools/fel-spiflash.c	2018-04-13 17:06:47.755103001 -0300
+@@ -38,13 +38,14 @@
+ 	char     *text_description;
+ } spi_flash_info_t;
+ 
++
+ spi_flash_info_t spi_flash_info[] = {
++	{ 0x1F47,   0x6,   0xD8, 64 * 1024,   0x20, 4 * 1024,   0x02, 256,   "Adesto AT25DF321A" },
+ 	{ 0xEF40,   0x6,   0xD8, 64 * 1024,   0x20, 4 * 1024,   0x02, 256,   "Winbond W25Qxx" },
++	{0x0000, 0x6, 0xD8, 64 * 1024, 0x20, 4 * 1024, 0x02, 256, "Unknown"}
+ };
+ 
+-spi_flash_info_t default_spi_flash_info = {
+-	0x0000, 0x6, 0xD8, 64 * 1024, 0x20, 4 * 1024, 0x02, 256, "Unknown"
+-};
++int flash_chip_counter = 0; //Hold the actual flash chip
+ 
+ /*****************************************************************************/
+ 
+@@ -133,8 +134,16 @@
+ 
+ 	/* Setup SPI0 pins muxing */
+ 	switch (sram_info->soc_id) {
++	case 0x1623: /* A10 */
++	case 0x1651: /* A20 */
++		gpio_set_cfgpin(usb, PC, 0, SUNXI_GPC_SPI0);
++		gpio_set_cfgpin(usb, PC, 1, SUNXI_GPC_SPI0);
++		gpio_set_cfgpin(usb, PC, 2, SUNXI_GPC_SPI0);
++		gpio_set_cfgpin(usb, PC, 23, SUNXI_GPC_SPI0);
++		break;
+ 	case 0x1625: /* Allwinner A13 */
+ 	case 0x1680: /* Allwinner H3 */
++	case 0x1718: /* Allwinner H5 */
+ 		gpio_set_cfgpin(usb, PC, 0, SUNXI_GPC_SPI0);
+ 		gpio_set_cfgpin(usb, PC, 1, SUNXI_GPC_SPI0);
+ 		gpio_set_cfgpin(usb, PC, 2, SUNXI_GPC_SPI0);
+@@ -364,7 +373,8 @@
+ 	void *backup = backup_sram(usb);
+ 	uint8_t *buf8 = (uint8_t *)buf;
+ 
+-	spi_flash_info_t *flash_info = &default_spi_flash_info; /* FIXME */
++	//spi_flash_info_t *flash_info = &default_spi_flash_info; /* FIXME */
++    spi_flash_info_t *flash_info = &spi_flash_info[flash_chip_counter]; /* FIXME */
+ 
+ 	if ((offset % flash_info->small_erase_size) != 0) {
+ 		fprintf(stderr, "aw_fel_spiflash_write: 'addr' must be %d bytes aligned\n",
+@@ -413,8 +423,9 @@
+ {
+ 	soc_sram_info *sram_info = aw_fel_get_sram_info(usb);
+ 	const char *manufacturer;
+-	unsigned char buf[] = { 0, 4, 0x9F, 0, 0, 0, 0x0, 0x0 };
++	unsigned char buf[] = { 0, 4, 0x9F, 1, 2, 3, 0x0, 0x0 };
+ 	void *backup = backup_sram(usb);
++	unsigned int chip_size = 0;
+ 
+ 	spi0_init(usb);
+ 	aw_fel_write(usb, buf, sram_info->spl_addr, sizeof(buf));
+@@ -430,17 +441,27 @@
+ 		return;
+ 	}
+ 
+-	switch (buf[3]) {
+-	case 0xEF:
+-		manufacturer = "Winbond";
+-		break;
+-	default:
+-		manufacturer = "Unknown";
+-		break;
+-	}
+ 
+-	printf("Manufacturer: %s (%02Xh), model: %02Xh, size: %d bytes.\n",
+-	       manufacturer, buf[3], buf[4], (1 << buf[5]));
++    manufacturer = "Unknown";
++    while(spi_flash_info[flash_chip_counter].id != 0){
++        if(buf[3] == spi_flash_info[flash_chip_counter].id>>8){
++            manufacturer = spi_flash_info[flash_chip_counter].text_description;
++        }
++        flash_chip_counter++;
++    }
++
++    //Adesto 0x9F command responds:
++    //Manufacturer ID = 0x1F
++    //Family(4 bits) + density(5 bits)
++    if(strncmp(manufacturer, "Adesto", 6) == 0){
++        chip_size = 4096;
++    }
++    else{
++        chip_size = 1<<buf[5];
++    }
++
++	printf("Manufacturer: %s (%02Xh), model: %02Xh, size: %dk bytes.\n",
++	       manufacturer, buf[3], buf[4], chip_size);
+ }
+ 
+ /*
